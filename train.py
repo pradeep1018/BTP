@@ -150,8 +150,8 @@ class CheXpert:
                 y_true = torch.cat((y_true, targets), 0)
                 losses.append(loss.item())
 
-        self.train_losses.append(sum(losses) / len(losses))
-        self.train_aucs.append(self.metrics(y_pred, y_true))
+        self.val_losses.append(sum(losses) / len(losses))
+        self.val_aucs.append(self.metrics(y_pred, y_true))
 
     def train(self, train_loader, val_loader, epochs=50):
         self.train_loader = train_loader
@@ -169,4 +169,6 @@ class CheXpert:
             self.earlystopping(self.val_losses[-1], self.model)
             if self.earlystopping.early_stop:
                 print('Early Stopping')
-                break
+                return self.val_losses, self.train_aucs[-1], self.val_aucs[-1]
+
+        return self.val_losses, self.train_aucs[-1], self.val_aucs[-1]
