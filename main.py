@@ -5,7 +5,7 @@ import pandas as pd
 from dataset import CheXpertData
 from train import CheXpert
 
-def main(train_csv, valid_csv, n_epochs=50, batch_size=64, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
+def main(train_csv, valid_csv, n_epochs=50, batch_size=32, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
     """ parameters """
     lr = 0.001
     beta1 = 0.93
@@ -15,21 +15,22 @@ def main(train_csv, valid_csv, n_epochs=50, batch_size=64, cdloss=True, cdloss_w
     train_data = CheXpertData(train_csv, mode='train')
     train_loader = DataLoader(train_data,
                         drop_last=True,shuffle=True,
-                        batch_size=batch_size)
+                        batch_size=batch_size, num_workers=32, pin_memory=True)
     val_data = CheXpertData(valid_csv, mode='val')
     val_loader = DataLoader(val_data,
                         drop_last=False,shuffle=False,
-                        batch_size=batch_size)
+                        batch_size=batch_size, num_workers=32, pin_memory=True)
 
-    chexpert_model = CheXpert()
-    loss, train_auc, val_auc = chexpert_model.train(train_loader, val_loader)
+    chexpert_model = CheXpert(n_classes=n_classes, lr=lr, beta1=beta1, beta2=beta2, 
+                              cdloss=cdloss, cdloss_weight=cdloss_weight, scloss=scloss, scloss_weight=scloss_weight)
+    loss, train_auc, val_auc = chexpert_model.train(train_loader, val_loader, epochs=n_epochs)
     return loss, train_auc, val_auc
 
 if __name__=='__main__':
     train_csv = 'CheXpert-v1.0-small/train.csv'
     valid_csv = 'CheXpert-v1.0-small/valid.csv'
-    num_epochs = 50
-    batch_size = 64
+    num_epochs = 20
+    batch_size = 32
     cdloss_weight = 1.2
     scloss_weight = 0.9
 

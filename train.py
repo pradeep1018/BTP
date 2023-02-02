@@ -2,31 +2,32 @@ import torch
 import numpy as np
 import torch.nn as nn
 from captum.attr import LayerGradCam, LayerAttribution
-from tqdm import trange
+from tqdm import tqdm, trange
+from torchvision.models import densenet121
 
 from losses import ClassDistinctivenessLoss, SpatialCoherenceConv
-from models import DenseNet121
 from metrics import AUC
-from utils import EarlyStopping
 
 class CheXpert:
     def __init__(self, n_classes=5, lr = 0.001, beta1 = 0.93, beta2 = 0.999, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         self.n_classes = n_classes
         self.cdloss = cdloss
         self.cdloss_weight = cdloss_weight
         self.scloss = scloss
         self.scloss_weight = scloss_weight
 
-        self.model = DenseNet121(self.n_classes)
+        self.model = densenet121(weights='DEFAULT')
+        self.model.classifier = nn.Linear(1024, n_classes)
+        for param in self.model.features.parameters():
+            param.requires_grad = False
         self.model = self.model.to(self.device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, betas=(beta1, beta2))
         self.sigmoid = nn.Sigmoid()
         self.gradcam = LayerGradCam(self.model, layer=self.model.features.denseblock4.denselayer16.conv2)
-        self.earlystopping = EarlyStopping(patience=3, cdloss=self.cdloss, scloss=self.scloss)
 
-        self.metric = AUC()
+        self.metrics = AUC()
 
         self.iteration = 0
         self.wceloss_scale = 1
@@ -45,9 +46,8 @@ class CheXpert:
         y_true = torch.tensor([]).to(self.device)
         y_pred = torch.tensor([]).to(self.device)
 
-        for inputs, targets in self.train_loader:
+        for inputs, targets in tqdm(self.train_loader):
             inputs = inputs.to(self.device)
-            targets = targets.to(self.device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
 
@@ -57,12 +57,13 @@ class CheXpert:
                 data_hist[ind] += 1
             data_hist /= self.train_loader.batch_size
 
+            targets = targets.to(self.device)
             ce_weights = torch.Tensor(data_hist).to(self.device)
             criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
 
             wceloss = criterion(outputs, targets)
             if self.iteration == 0:
-                self.wceloss_scale = 1 / wceloss.item()
+                self.wceloss_scale = 1 / (wceloss.item())
             wceloss *= self.wceloss_scale
             loss = wceloss
 
@@ -73,7 +74,7 @@ class CheXpert:
                     cdcriterion = ClassDistinctivenessLoss(device=self.device)
                     cdloss_value = cdcriterion(attr_classes)
                     if self.iteration == 0:
-                        self.cdloss_scale = 1 / cdloss_value.item()
+                        self.cdloss_scale = 1 / (cdloss_value.item())
                     cdloss_value *= self.cdloss_scale
                     loss += self.cdloss_weight * cdloss_value
 
@@ -83,7 +84,7 @@ class CheXpert:
                     sccriterion = SpatialCoherenceConv(device=self.device, kernel_size=9)
                     scloss_value = sccriterion(upsampled_attr_val, device=self.device)
                     if self.iteration == 0:
-                        self.scloss_scale = 1 / scloss_value.item()
+                        self.scloss_scale = 1 / (scloss_value.item())
                     scloss_value *= self.scloss_scale
                     loss += self.scloss_weight * scloss_value
             
@@ -109,9 +110,8 @@ class CheXpert:
         y_pred = torch.tensor([]).to(self.device)
 
         with torch.no_grad():
-            for inputs, targets in self.val_loader:
+            for inputs, targets in tqdm(self.val_loader):
                 inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
                 outputs = self.model(inputs)
 
                 data_hist = np.zeros(self.n_classes)
@@ -120,6 +120,7 @@ class CheXpert:
                     data_hist[ind] += 1
                 data_hist /= self.train_loader.batch_size
 
+                targets = targets.to(self.device)
                 ce_weights = torch.Tensor(data_hist).to(self.device)
                 criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
 
@@ -162,13 +163,8 @@ class CheXpert:
             self.train_one_epoch()
             self.evaluate()
             
-            print("Epoch {0}: Training Loss = {1}, Validation Loss = {2}, Average Training AUC = {2}, Average Validation AUC = {3}".
+            print("Epoch {0}: Training Loss = {1}, Validation Loss = {2}, Average Training AUC = {3}, Average Validation AUC = {4}".
             format(epoch+1, self.train_losses[-1], self.val_losses[-1], 
             sum(self.train_aucs[-1])/self.n_classes, sum(self.val_aucs[-1])/self.n_classes))
-            
-            self.earlystopping(self.val_losses[-1], self.model)
-            if self.earlystopping.early_stop:
-                print('Early Stopping')
-                return self.val_losses, self.train_aucs[-1], self.val_aucs[-1]
 
         return self.val_losses, self.train_aucs[-1], self.val_aucs[-1]
