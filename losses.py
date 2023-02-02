@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 import itertools
 from skimage.morphology import label, binary_erosion
+from typing import List
 
 class ClassDistinctivenessLoss(nn.Module):
     def __init__(self, device):
@@ -14,7 +15,7 @@ class ClassDistinctivenessLoss(nn.Module):
     def view_tensor(self, tensor: torch.Tensor) -> torch.Tensor:
         return tensor.view(tensor.shape[0], -1)
 
-    def forward(self, sal_tensor_list: [torch.Tensor]) -> torch.Tensor:
+    def forward(self, sal_tensor_list: List[torch.Tensor]) -> torch.Tensor:
         loss_list = torch.Tensor([]).to(self.device)
         for sal_comb in itertools.combinations(sal_tensor_list, 2):
             loss_list = torch.cat((loss_list, torch.unsqueeze(torch.abs(self.cossim(self.view_tensor(sal_comb[0]), self.view_tensor(sal_comb[1]))).mean(), dim=0)))
