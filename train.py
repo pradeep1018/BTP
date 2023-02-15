@@ -23,7 +23,7 @@ class CheXpert:
             param.requires_grad = False
         self.model = self.model.to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr, betas=(beta1, beta2))
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)#, betas=(beta1, beta2))
         self.sigmoid = nn.Sigmoid()
         self.gradcam = LayerGradCam(self.model, layer=self.model.features.denseblock4.denselayer16.conv2)
 
@@ -62,9 +62,11 @@ class CheXpert:
             criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
 
             wceloss = criterion(outputs, targets)
+            """
             if self.iteration == 0:
                 self.wceloss_scale = 1 / (wceloss.item())
             wceloss *= self.wceloss_scale
+            """
             loss = wceloss
 
             if self.cdloss or self.scloss:
@@ -125,7 +127,7 @@ class CheXpert:
                 criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
 
                 wceloss = criterion(outputs, targets)
-                wceloss *= self.wceloss_scale
+                #wceloss *= self.wceloss_scale
                 loss = wceloss
 
                 if self.cdloss or self.scloss:
