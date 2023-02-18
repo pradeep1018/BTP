@@ -34,11 +34,18 @@ if __name__=='__main__':
 
     loss_cel, train_auc_cel, val_auc_cel = main(train_csv, valid_csv, num_epochs, batch_size)
 
+<<<<<<< HEAD
     #loss_cl, train_auc_cl, val_auc_cl = main(train_csv, valid_csv, num_epochs, batch_size, 
     #cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9)
 
     plt.plot(loss_cel, label='crossentropy loss')
     #plt.plot(loss_cl, label='custom loss')
+=======
+    #loss_cl, train_auc_cl, val_auc_cl = main(train_csv, valid_csv, num_epochs, batch_size)
+
+    plt.plot(loss_cel, label='crossentropy loss')
+    plt.plot(loss_cl, label='custom loss')
+>>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
     plt.show()
