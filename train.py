@@ -1,30 +1,20 @@
 import torch
 import numpy as np
 import torch.nn as nn
-<<<<<<< HEAD
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
-=======
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
 from captum.attr import LayerGradCam, LayerAttribution
 from tqdm import tqdm, trange
 from torchvision.models import densenet121
 
 from losses import ClassDistinctivenessLoss, SpatialCoherenceConv
 from metrics import AUC
-<<<<<<< HEAD
 from utils import EarlyStopping
 
 class CheXpert:
     def __init__(self, n_classes=5, lr = 0.001, beta1 = 0.93, beta2 = 0.999, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
         self.device = torch.device("cuda:5" if torch.cuda.is_available() else "cpu")
-=======
-
-class CheXpert:
-    def __init__(self, n_classes=5, lr = 0.001, beta1 = 0.93, beta2 = 0.999, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
-        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
         self.n_classes = n_classes
         self.cdloss = cdloss
         self.cdloss_weight = cdloss_weight
@@ -33,27 +23,18 @@ class CheXpert:
 
         self.model = densenet121(weights='DEFAULT')
         self.model.classifier = nn.Linear(1024, n_classes)
-<<<<<<< HEAD
         #for param in self.model.features.parameters():
             #param.requires_grad = False
         #self.model = nn.DataParallel(self.model, [0,1,4,5])
         self.model = self.model.to(self.device)
         
-=======
-        for param in self.model.features.parameters():
-            param.requires_grad = False
-        self.model = self.model.to(self.device)
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)#, betas=(beta1, beta2))
         self.sigmoid = nn.Sigmoid()
         self.gradcam = LayerGradCam(self.model, layer=self.model.features.denseblock4.denselayer16.conv2)
 
         self.metrics = AUC()
-<<<<<<< HEAD
         self.early_stopping = EarlyStopping(patience=3, verbose=True)
-=======
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
 
         self.iteration = 0
         self.wceloss_scale = 1
@@ -195,13 +176,9 @@ class CheXpert:
             format(epoch+1, self.train_losses[-1], self.val_losses[-1], 
             sum(self.train_aucs[-1])/self.n_classes, sum(self.val_aucs[-1])/self.n_classes))
 
-<<<<<<< HEAD
             self.early_stopping(self.val_losses[-1], self.model, epoch)
             if self.early_stopping.early_stop:
                 print("Early stopping")
                 break
 
         return self.val_losses, self.train_aucs[self.early_stopping.best_epoch], self.val_aucs[self.early_stopping.best_epoch]
-=======
-        return self.val_losses, self.train_aucs[-1], self.val_aucs[-1]
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9

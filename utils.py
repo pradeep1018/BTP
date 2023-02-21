@@ -3,11 +3,7 @@ import numpy as np
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
-<<<<<<< HEAD
     def __init__(self, patience=3, verbose=False, cdloss = False, scloss=False):
-=======
-    def __init__(self, patience=7, verbose=False, cdloss = True, scloss=True):
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -23,14 +19,9 @@ class EarlyStopping:
         self.val_loss_min = np.Inf
         self.cdloss = cdloss
         self.scloss = scloss
-<<<<<<< HEAD
         self.best_epoch = 0
 
     def __call__(self, val_loss, model, epoch):
-=======
-
-    def __call__(self, val_loss, model):
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
         score = -val_loss
 
         if self.best_score is None:
@@ -45,10 +36,7 @@ class EarlyStopping:
             self.best_score = score
             self.save_checkpoint(val_loss, model)
             self.counter = 0
-<<<<<<< HEAD
             self.best_epoch = epoch
-=======
->>>>>>> b4e3bcee0a21677d66cb76ff5f2fb9e9e71a61b9
 
     def save_checkpoint(self, val_loss, model):
         '''Saves model when validation loss decrease.'''
