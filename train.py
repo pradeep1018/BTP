@@ -7,34 +7,35 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from captum.attr import LayerGradCam, LayerAttribution
 from tqdm import tqdm, trange
 from torchvision.models import densenet121
+import datetime
+import pytz
 
 from losses import ClassDistinctivenessLoss, SpatialCoherenceConv
 from metrics import AUC
 from utils import EarlyStopping
 
 class CheXpert:
-    def __init__(self, n_classes=5, lr = 0.001, beta1 = 0.93, beta2 = 0.999, cdloss=True, cdloss_weight=1.2, scloss=True, scloss_weight=0.9):
-        self.device = torch.device("cuda:5" if torch.cuda.is_available() else "cpu")
-        self.n_classes = n_classes
-        self.cdloss = cdloss
-        self.cdloss_weight = cdloss_weight
-        self.scloss = scloss
-        self.scloss_weight = scloss_weight
+    def __init__(self, args):
+        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+        self.n_classes = args.n_classes
+        self.cdloss = args.cdloss
+        self.cdloss_weight = args.cdloss_weight
+        self.scloss = args.scloss
+        self.scloss_weight = args.scloss_weight
+        self.wceloss = True
+        if args.training_type == 'semi-supervised':
+            self.wceloss = False
 
         self.model = densenet121(weights='DEFAULT')
-        self.model.classifier = nn.Linear(1024, n_classes)
-        #for param in self.model.features.parameters():
-            #param.requires_grad = False
-        #self.model = nn.DataParallel(self.model, [0,1,4,5])
+        self.model.classifier = nn.Linear(1024, self.n_classes)
         self.model = self.model.to(self.device)
-        
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)#, betas=(beta1, beta2))
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
         self.sigmoid = nn.Sigmoid()
         self.gradcam = LayerGradCam(self.model, layer=self.model.features.denseblock4.denselayer16.conv2)
 
         self.metrics = AUC()
-        self.early_stopping = EarlyStopping(patience=3, verbose=True)
+        self.early_stopping = EarlyStopping(args)
 
         self.iteration = 0
         self.wceloss_scale = 1
@@ -45,6 +46,9 @@ class CheXpert:
         self.val_losses = []
         self.train_aucs = []
         self.val_aucs = []
+        self.loss_df = pd.DataFrame(columns=['Training Loss','Validation Loss'])
+        self.train_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
+        self.val_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
 
     def train_one_epoch(self):
         self.model.train()
@@ -67,24 +71,26 @@ class CheXpert:
             targets = targets.to(self.device)
             ce_weights = torch.Tensor(data_hist).to(self.device)
             criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
+            loss = 0
 
-            wceloss = criterion(outputs, targets)
-            """
-            if self.iteration == 0:
-                self.wceloss_scale = 1 / (wceloss.item())
-            wceloss *= self.wceloss_scale
-            """
-            loss = wceloss
+            if self.wceloss:
+                wceloss = criterion(outputs, targets)
+                """
+                if self.iteration == 0:
+                    self.wceloss_scale = 1 / (wceloss.item())
+                wceloss *= self.wceloss_scale
+                """
+                loss += wceloss
 
             if self.cdloss or self.scloss:
-                attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, [i] * inputs.shape[0])) for i in range(self.n_classes)]
+                attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, i)) for i in range(self.n_classes)]
 
                 if self.cdloss:
                     cdcriterion = ClassDistinctivenessLoss(device=self.device)
                     cdloss_value = cdcriterion(attr_classes)
-                    if self.iteration == 0:
-                        self.cdloss_scale = 1 / (cdloss_value.item())
-                    cdloss_value *= self.cdloss_scale
+                    #if self.iteration == 0:
+                    #    self.cdloss_scale = 1 / (cdloss_value.item())
+                    #cdloss_value *= self.cdloss_scale
                     loss += self.cdloss_weight * cdloss_value
 
                 if self.scloss:
@@ -92,9 +98,9 @@ class CheXpert:
                                         attr in attr_classes]
                     sccriterion = SpatialCoherenceConv(device=self.device, kernel_size=9)
                     scloss_value = sccriterion(upsampled_attr_val, device=self.device)
-                    if self.iteration == 0:
-                        self.scloss_scale = 1 / (scloss_value.item())
-                    scloss_value *= self.scloss_scale
+                    #if self.iteration == 0:
+                    #    self.scloss_scale = 1 / (scloss_value.item())
+                    #scloss_value *= self.scloss_scale
                     loss += self.scloss_weight * scloss_value
             
             predictions = self.sigmoid(outputs).to(self.device)
@@ -132,10 +138,12 @@ class CheXpert:
                 targets = targets.to(self.device)
                 ce_weights = torch.Tensor(data_hist).to(self.device)
                 criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
+                loss = 0
 
-                wceloss = criterion(outputs, targets)
-                #wceloss *= self.wceloss_scale
-                loss = wceloss
+                if self.wceloss:
+                    wceloss = criterion(outputs, targets)
+                    #wceloss *= self.wceloss_scale
+                    loss += wceloss
 
                 if self.cdloss or self.scloss:
                     attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, [i] * inputs.shape[0])) for i in range(self.n_classes)]
@@ -143,7 +151,7 @@ class CheXpert:
                     if self.cdloss:
                         cdcriterion = ClassDistinctivenessLoss(device=self.device)
                         cdloss_value = cdcriterion(attr_classes)
-                        cdloss_value *= self.cdloss_scale
+                        #cdloss_value *= self.cdloss_scale
                         loss += self.cdloss_weight * cdloss_value
 
                     if self.scloss:
@@ -151,7 +159,7 @@ class CheXpert:
                                             attr in attr_classes]
                         sccriterion = SpatialCoherenceConv(device=self.device, kernel_size=9)
                         scloss_value = sccriterion(upsampled_attr_val, device=self.device)
-                        scloss_value *= self.scloss_scale
+                        #scloss_value *= self.scloss_scale
                         loss += self.scloss_weight * scloss_value
                 
                 predictions = self.sigmoid(outputs).to(self.device)
@@ -163,7 +171,7 @@ class CheXpert:
         self.val_losses.append(sum(losses) / len(losses))
         self.val_aucs.append(self.metrics(y_pred, y_true))
 
-    def train(self, train_loader, val_loader, epochs=50):
+    def train(self, train_loader, val_loader, epochs):
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.epochs = epochs
@@ -176,9 +184,27 @@ class CheXpert:
             format(epoch+1, self.train_losses[-1], self.val_losses[-1], 
             sum(self.train_aucs[-1])/self.n_classes, sum(self.val_aucs[-1])/self.n_classes))
 
+            losses = [self.train_losses[-1], self.val_losses[-1]]
+            self.loss_df['Epoch {}'.format(epoch+1)] = losses
+
+            train_auc = self.train_aucs[-1]
+            train_auc = train_auc.tolist()
+            train_auc.append(sum(train_auc_cel)/len(train_auc_cel))
+            self.train_auc_df.loc['Epoch {}'.format(epoch+1)] = train_auc_cel
+
+            val_auc = self.val_aucs[-1]
+            val_auc = val_auc.tolist()
+            val_auc.append(sum(val_auc_cel)/len(val_auc_cel))
+            self.val_auc_df.loc['Epoch {}'.format(epoch+1)] = val_auc_cel
+
             self.early_stopping(self.val_losses[-1], self.model, epoch)
             if self.early_stopping.early_stop:
                 print("Early stopping")
                 break
 
-        return self.val_losses, self.train_aucs[self.early_stopping.best_epoch], self.val_aucs[self.early_stopping.best_epoch]
+        time = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
+        time = str(time.day) + '_' + str(time.month) + '_' + str(time.year) + '_' + str(time.hour) + '_' + str(time.minute) + '_' + str(time.second)
+        
+        self.loss_df.to_csv('results/chexpert_train_auc_{}.csv'.format(time))
+        self.train_auc_df.to_csv('results/chexpert_train_auc_{}.csv'.format(time))
+        self.val_auc_df.to_csv('results/chexpert_val_auc_{}.csv'.format(time))

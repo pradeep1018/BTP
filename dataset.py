@@ -39,6 +39,7 @@ class CheXpertData(Dataset):
                         labels.append(self.dict[1].get(value))
                     elif index == 2 or index == 6 or index == 10:
                         labels.append(self.dict[0].get(value))
+                    """
                     if index == 2 and self.dict[0].get(value) == '1':
                         c1+=1
                     elif index == 5 and self.dict[1].get(value) == '1':
@@ -49,8 +50,8 @@ class CheXpertData(Dataset):
                         c4+=1
                     elif index == 10 and self.dict[0].get(value) == '1':
                         c5+=1
+                    """
                 labels = list(map(int, labels))
-                """
                 self._image_paths.append(image_path)
                 self._labels.append(labels)
                 """
@@ -69,6 +70,7 @@ class CheXpertData(Dataset):
                 elif c5<=9000 and labels[4]==1:
                     self._image_paths.append(image_path)
                     self._labels.append(labels)
+                """
         self._num_image = len(self._image_paths)
 
     def __len__(self):
