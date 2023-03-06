@@ -20,6 +20,7 @@ class EarlyStopping:
         self.cdloss = args.cdloss
         self.scloss = args.scloss
         self.training_type = args.training_type
+        self.data = args.data
         self.best_epoch = 0
 
     def __call__(self, val_loss, model, epoch):
@@ -43,14 +44,20 @@ class EarlyStopping:
         '''Saves model when validation loss decrease.'''
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
-        if self.training_type=='semi-supervised':
-            torch.save(model.state_dict(), 'model-weights/chexpert_cd_sc.pt')
-        else if self.cdloss and self.scloss:
-            torch.save(model.state_dict(), 'model-weights/chexpert_wce_cd_sc.pt')
-        else if self.cdloss:
-            torch.save(model.state_dict(), 'model-weights/chexpert_wce_cd.pt')
-        else if self.scloss:
-            torch.save(model.state_dict(), 'model-weights/chexpert_wce_sc.pt')
+        if self.training_type=='double-stage':
+            torch.save(model.state_dict(), 'model-weights/{}_double_stage.pt'.format(self.data))
+        elif self.cdloss and self.scloss:
+            torch.save(model.state_dict(), 'model-weights/{}_wce_cd_sc.pt'.format(self.data))
+        elif self.cdloss:
+            torch.save(model.state_dict(), 'model-weights/{}_wce_cd.pt'.format(self.data))
+        elif self.scloss:
+            torch.save(model.state_dict(), 'model-weights/{}_wce_sc.pt'.format(self.data))
         else:
-            torch.save(model.state_dict(), 'model-weights/chexpert_wce.pt')
+            torch.save(model.state_dict(), 'model-weights/{}_wce.pt'.format(self.data))
         self.val_loss_min = val_loss
+
+def str_to_bool(s):
+    if s == 'True':
+         return True
+    elif s == 'False':
+         return False

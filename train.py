@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import pandas as pd
 import torch.nn as nn
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -16,23 +17,29 @@ from utils import EarlyStopping
 
 class CheXpert:
     def __init__(self, args):
-        self.device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.n_classes = args.n_classes
+        self.batch_size = args.batch_size
+        self.data = args.data
+        self.training_type = args.training_type
         self.cdloss = args.cdloss
         self.cdloss_weight = args.cdloss_weight
         self.scloss = args.scloss
         self.scloss_weight = args.scloss_weight
-        self.wceloss = True
-        if args.training_type == 'semi-supervised':
-            self.wceloss = False
 
-        self.model = densenet121(weights='DEFAULT')
-        self.model.classifier = nn.Linear(1024, self.n_classes)
+        if self.data=='chexpert':
+            if self.training_type == 'double-stage':
+                self.model = densenet121()
+                self.model.classifier = nn.Linear(1024, self.n_classes)
+                self.model.load_state_dict(torch.load('model-weights/chexpert_wce.pt'))
+            else:
+                self.model = densenet121(weights='DEFAULT')
+                self.model.classifier = nn.Linear(1024, self.n_classes)
         self.model = self.model.to(self.device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2))
         self.sigmoid = nn.Sigmoid()
-        self.gradcam = LayerGradCam(self.model, layer=self.model.features.denseblock4.denselayer16.conv2)
+        self.gradcam = LayerGradCam(self.model, layer=self.model.features[-1])
 
         self.metrics = AUC()
         self.early_stopping = EarlyStopping(args)
@@ -46,9 +53,11 @@ class CheXpert:
         self.val_losses = []
         self.train_aucs = []
         self.val_aucs = []
+
         self.loss_df = pd.DataFrame(columns=['Training Loss','Validation Loss'])
-        self.train_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
-        self.val_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
+        if args.data=='chexpert':
+            self.train_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
+            self.val_auc_df = pd.DataFrame(columns=['Atelectasis','Cardiomegaly','Consolidation','Edema','Plural Effusion','Mean'])
 
     def train_one_epoch(self):
         self.model.train()
@@ -62,6 +71,8 @@ class CheXpert:
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
 
+            loss = 0
+
             data_hist = np.zeros(self.n_classes)
             for target in targets:
                 ind = np.where(target==1)
@@ -71,26 +82,22 @@ class CheXpert:
             targets = targets.to(self.device)
             ce_weights = torch.Tensor(data_hist).to(self.device)
             criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
-            loss = 0
 
-            if self.wceloss:
-                wceloss = criterion(outputs, targets)
-                """
-                if self.iteration == 0:
-                    self.wceloss_scale = 1 / (wceloss.item())
-                wceloss *= self.wceloss_scale
-                """
-                loss += wceloss
+            wceloss = criterion(outputs, targets)
+            if self.iteration == 0:
+                self.wceloss_scale = 1 / (wceloss.item())
+            wceloss *= self.wceloss_scale
+            loss += wceloss
 
             if self.cdloss or self.scloss:
-                attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, i)) for i in range(self.n_classes)]
-
+                attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, [i] * inputs.shape[0])).to(self.device) for i in range(self.n_classes)]
+                
                 if self.cdloss:
                     cdcriterion = ClassDistinctivenessLoss(device=self.device)
                     cdloss_value = cdcriterion(attr_classes)
-                    #if self.iteration == 0:
-                    #    self.cdloss_scale = 1 / (cdloss_value.item())
-                    #cdloss_value *= self.cdloss_scale
+                    if self.iteration == 0:
+                        self.cdloss_scale = 1 / (cdloss_value.item())
+                    cdloss_value *= self.cdloss_scale
                     loss += self.cdloss_weight * cdloss_value
 
                 if self.scloss:
@@ -98,16 +105,15 @@ class CheXpert:
                                         attr in attr_classes]
                     sccriterion = SpatialCoherenceConv(device=self.device, kernel_size=9)
                     scloss_value = sccriterion(upsampled_attr_val, device=self.device)
-                    #if self.iteration == 0:
-                    #    self.scloss_scale = 1 / (scloss_value.item())
-                    #scloss_value *= self.scloss_scale
+                    if self.iteration == 0:
+                        self.scloss_scale = 1 / (scloss_value.item())
+                    scloss_value *= self.scloss_scale
                     loss += self.scloss_weight * scloss_value
-            
+                    
             predictions = self.sigmoid(outputs).to(self.device)
-
             y_pred = torch.cat((y_pred, predictions), 0)
             y_true = torch.cat((y_true, targets), 0)
-            losses.append(loss.item())
+            losses.append(loss.item()/self.batch_size)
             
             loss.backward()
             self.optimizer.step()
@@ -129,6 +135,8 @@ class CheXpert:
                 inputs = inputs.to(self.device)
                 outputs = self.model(inputs)
 
+                loss = 0 
+
                 data_hist = np.zeros(self.n_classes)
                 for target in targets:
                     ind = np.where(target==1)
@@ -140,18 +148,17 @@ class CheXpert:
                 criterion = nn.BCEWithLogitsLoss(weight=ce_weights)
                 loss = 0
 
-                if self.wceloss:
-                    wceloss = criterion(outputs, targets)
-                    #wceloss *= self.wceloss_scale
-                    loss += wceloss
+                wceloss = criterion(outputs, targets)
+                wceloss *= self.wceloss_scale
+                loss += wceloss
 
                 if self.cdloss or self.scloss:
-                    attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, [i] * inputs.shape[0])) for i in range(self.n_classes)]
+                    attr_classes = [torch.Tensor(self.gradcam.attribute(inputs, [i] * inputs.shape[0])).to(self.device) for i in range(self.n_classes)]
 
                     if self.cdloss:
                         cdcriterion = ClassDistinctivenessLoss(device=self.device)
                         cdloss_value = cdcriterion(attr_classes)
-                        #cdloss_value *= self.cdloss_scale
+                        cdloss_value *= self.cdloss_scale
                         loss += self.cdloss_weight * cdloss_value
 
                     if self.scloss:
@@ -159,7 +166,7 @@ class CheXpert:
                                             attr in attr_classes]
                         sccriterion = SpatialCoherenceConv(device=self.device, kernel_size=9)
                         scloss_value = sccriterion(upsampled_attr_val, device=self.device)
-                        #scloss_value *= self.scloss_scale
+                        scloss_value *= self.scloss_scale
                         loss += self.scloss_weight * scloss_value
                 
                 predictions = self.sigmoid(outputs).to(self.device)
@@ -189,13 +196,13 @@ class CheXpert:
 
             train_auc = self.train_aucs[-1]
             train_auc = train_auc.tolist()
-            train_auc.append(sum(train_auc_cel)/len(train_auc_cel))
-            self.train_auc_df.loc['Epoch {}'.format(epoch+1)] = train_auc_cel
+            train_auc.append(sum(train_auc)/len(train_auc))
+            self.train_auc_df.loc['Epoch {}'.format(epoch+1)] = train_auc
 
             val_auc = self.val_aucs[-1]
             val_auc = val_auc.tolist()
-            val_auc.append(sum(val_auc_cel)/len(val_auc_cel))
-            self.val_auc_df.loc['Epoch {}'.format(epoch+1)] = val_auc_cel
+            val_auc.append(sum(val_auc)/len(val_auc))
+            self.val_auc_df.loc['Epoch {}'.format(epoch+1)] = val_auc
 
             self.early_stopping(self.val_losses[-1], self.model, epoch)
             if self.early_stopping.early_stop:
@@ -204,7 +211,24 @@ class CheXpert:
 
         time = datetime.datetime.now(pytz.timezone('Asia/Kolkata'))
         time = str(time.day) + '_' + str(time.month) + '_' + str(time.year) + '_' + str(time.hour) + '_' + str(time.minute) + '_' + str(time.second)
-        
-        self.loss_df.to_csv('results/chexpert_train_auc_{}.csv'.format(time))
-        self.train_auc_df.to_csv('results/chexpert_train_auc_{}.csv'.format(time))
-        self.val_auc_df.to_csv('results/chexpert_val_auc_{}.csv'.format(time))
+
+        if self.training_type=='double-stage':
+            self.loss_df.to_csv('results/{}_loss_double_stage_{}.csv'.format(self.data, time))
+            self.train_auc_df.to_csv('results/{}_train_auc_double_stage_{}.csv'.format(self.data, time))
+            self.val_auc_df.to_csv('results/{}_val_auc_double_stage_{}.csv'.format(self.data, time))
+        elif self.cdloss and self.scloss:
+            self.loss_df.to_csv('results/{}_loss_wce_cd_sc_{}.csv'.format(self.data, time))
+            self.train_auc_df.to_csv('results/{}_train_auc_wce_cd_sc_{}.csv'.format(self.data, time))
+            self.val_auc_df.to_csv('results/{}_val_auc_wce_cd_sc_{}.csv'.format(self.data, time))
+        elif self.cdloss:
+            self.loss_df.to_csv('results/{}_loss_wce_cd_{}.csv'.format(self.data, time))
+            self.train_auc_df.to_csv('results/{}_train_auc_wce_cd_{}.csv'.format(self.data, time))
+            self.val_auc_df.to_csv('results/{}_val_auc_wce_cd_{}.csv'.format(self.data, time))
+        elif self.scloss:
+            self.loss_df.to_csv('results/{}_loss_wce_sc_{}.csv'.format(self.data, time))
+            self.train_auc_df.to_csv('results/{}_train_auc_wce_sc_{}.csv'.format(self.data, time))
+            self.val_auc_df.to_csv('results/{}_val_auc_wce_sc_{}.csv'.format(self.data, time))
+        else:
+            self.loss_df.to_csv('results/{}_loss_wce_{}.csv'.format(self.data, time))
+            self.train_auc_df.to_csv('results/{}_train_auc_wce_{}.csv'.format(self.data, time))
+            self.val_auc_df.to_csv('results/{}_val_auc_wce_{}.csv'.format(self.data, time))
