@@ -1,5 +1,6 @@
 # CP302
 
+The implementation is based on the paper [Interpretability-Guided Inductive Bias For Deep Learning Based Medical Image](https://www.sciencedirect.com/science/article/pii/S1361841522001980).
 AUC of wce model is [0.7438127690100431, 0.8455139631610219, 0.9023907415867214, 0.8419789856871018, 0.8694779116465864]
 
 AUC of custom loss model is [0.7761836441893831, 0.8420677361853832, 0.894015532206487, 0.8108711839166045, 0.8707557502738226]
